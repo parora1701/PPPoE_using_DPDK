@@ -1,3 +1,23 @@
+/* lab_main - Starting point of server, establishes mempool and enables lcores and interfaces.
+ * Copyright (C) 2016  Puneet Arora
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * puneet.arora@stud.tu-darmstadt.de, Technical University Darmstadt
+ *
+ */
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,8 +64,6 @@
 #include <rte_udp.h>
 #include <rte_tcp.h>
 
-
-
 //======= Pre-Definitions
 
 //#define TEST_HASH_ONLY
@@ -67,70 +85,46 @@
 
 #include "pppoe.h"
 #include "ippool.c"
-#include "lab_task.c"
 #include "session.c"
+#include "lab_task.c"
+#include "pppoe_auth.c"
+#include "pppoeconfig.c"
 
 struct rte_mempool* mempool;
-//uint32_t pppoe_enabled_port_mask;
 uint8_t pppoe_enabled_port_nb;
 
-static struct rte_eth_conf default_ethconf = {
-        .link_speed = 0,
-        .link_duplex = 0,
-        .rxmode = {
-            .mq_mode = ETH_MQ_RX_NONE,
-            .max_rx_pkt_len = 0,
-            .split_hdr_size = 0,
-            .header_split = 0,
-            .hw_ip_checksum = 0,
-            .hw_vlan_filter = 0,
-            .hw_vlan_strip = 0,
-            .hw_vlan_extend = 0,
-            .jumbo_frame = 0,
-            .hw_strip_crc = 0,
-            .enable_scatter = 0,
-            .enable_lro = 0,
-        },
-        .txmode = {
-            .mq_mode = ETH_MQ_TX_NONE,
-            .hw_vlan_reject_tagged = 0,
-            .hw_vlan_reject_untagged = 0,
-            .hw_vlan_insert_pvid = 0,
-        },
-        .lpbk_mode = 0,
-        .rx_adv_conf = {
-            .rss_conf = {		//Receive Side Scaling.
-                .rss_key = NULL,
-                .rss_key_len = 0,
-                .rss_hf = 0,
-            },
-        },
-    };
+pthread_mutex_t conn_lock;
 
-    static const struct rte_eth_rxconf rx_conf = {
-        .rx_thresh = {
-            .pthresh = 8,	//prefetch
-            .hthresh = 8,	//host
-            .wthresh = 4	//write-back
+static struct rte_eth_conf default_ethconf = { .link_speed = 0,
+           .link_duplex = 0, .rxmode = { .mq_mode = ETH_MQ_RX_NONE,
+                                         .max_rx_pkt_len = 0, .split_hdr_size = 0, .header_split = 0,
+                                         .hw_ip_checksum = 0, .hw_vlan_filter = 0, .hw_vlan_strip = 0,
+                                         .hw_vlan_extend = 0, .jumbo_frame = 0, .hw_strip_crc = 0,
+                                         .enable_scatter = 0, .enable_lro = 0,
+                                       }, .txmode = { .mq_mode =
+                                               ETH_MQ_TX_NONE, .hw_vlan_reject_tagged = 0,
+                                                      .hw_vlan_reject_untagged = 0, .hw_vlan_insert_pvid = 0,
+                                                    },
+    .lpbk_mode = 0, .rx_adv_conf = { .rss_conf = {	//Receive Side Scaling.
+            .rss_key = NULL, .rss_key_len = 0, .rss_hf = 0,
         },
-        .rx_free_thresh = 32,
-    };
+    },
+};
 
-    static struct rte_eth_txconf tx_conf = {
-        .tx_thresh = {
-            .pthresh = 36,
-            .hthresh = 0,
-            .wthresh = 0
-        },
-        .tx_free_thresh = 0,
-        .tx_rs_thresh = 0,
-        .txq_flags = (ETH_TXQ_FLAGS_NOMULTSEGS |
-            ETH_TXQ_FLAGS_NOVLANOFFL |
-            ETH_TXQ_FLAGS_NOXSUMSCTP |
-            ETH_TXQ_FLAGS_NOXSUMUDP |
-            ETH_TXQ_FLAGS_NOXSUMTCP)
+static const struct rte_eth_rxconf rx_conf = { .rx_thresh = { .pthresh = 8,	//prefetch
+                                                                  .hthresh = 8,	//host
+                                                                  .wthresh = 4	//write-back
+                                                                }, .rx_free_thresh = 32,
+};
 
-    };
+static struct rte_eth_txconf tx_conf = { .tx_thresh = { .pthresh = 36,
+                                                            .hthresh = 0, .wthresh = 0
+                                                          }, .tx_free_thresh = 0, .tx_rs_thresh = 0,
+                                                              .txq_flags = (ETH_TXQ_FLAGS_NOMULTSEGS | ETH_TXQ_FLAGS_NOVLANOFFL
+                                                                      | ETH_TXQ_FLAGS_NOXSUMSCTP | ETH_TXQ_FLAGS_NOXSUMUDP
+                                                                      | ETH_TXQ_FLAGS_NOXSUMTCP)
+
+};
 
 /*
  * Initializes a given port using global settings and with the RX buffers
@@ -152,19 +146,21 @@ static inline int port_init(uint8_t port, struct rte_mempool *mbuf_pool)
         return retval;
 
     /* Allocate and set up 1 RX queue per Ethernet port. */
-    for (q = 0; q < rx_rings; q++) {
+    for (q = 0; q < rx_rings; q++)
+    {
         retval = rte_eth_rx_queue_setup(port, q, RTE_TEST_RX_DESC_DEFAULT,
-                rte_eth_dev_socket_id(port), &rx_conf, mempool);
+                                        rte_eth_dev_socket_id(port), &rx_conf, mempool);
 
         if (retval < 0)
             return retval;
     }
 
     /* Allocate and set up 1 TX queue per Ethernet port. */
-    for (q = 0; q < tx_rings; q++) {
+    for (q = 0; q < tx_rings; q++)
+    {
 
         retval = rte_eth_tx_queue_setup(port, q, RTE_TEST_TX_DESC_DEFAULT,
-                rte_eth_dev_socket_id(port), &tx_conf);
+                                        rte_eth_dev_socket_id(port), &tx_conf);
         if (retval < 0)
             return retval;
     }
@@ -183,41 +179,43 @@ static inline int port_init(uint8_t port, struct rte_mempool *mbuf_pool)
     return 0;
 }
 
+static unsigned tz_getMBufMempoolSize(uint8_t ports_c, uint8_t lcores_c,
+                                      uint8_t rx_queues_c, uint8_t tx_queues_c)
+{
 
-static unsigned tz_getMBufMempoolSize(uint8_t ports_c, uint8_t lcores_c, uint8_t rx_queues_c, uint8_t tx_queues_c) {
+    unsigned result = ports_c * rx_queues_c * RTE_TEST_RX_DESC_DEFAULT
+                      + ports_c * lcores_c * MAX_SIZE_BURST
+                      + ports_c * tx_queues_c * RTE_TEST_TX_DESC_DEFAULT
+                      + lcores_c * MEMPOOL_CACHE_SIZE;
 
-    unsigned result =
-    ports_c * rx_queues_c * RTE_TEST_RX_DESC_DEFAULT +
-    ports_c * lcores_c * MAX_SIZE_BURST +
-    ports_c * tx_queues_c * RTE_TEST_TX_DESC_DEFAULT +
-    lcores_c * MEMPOOL_CACHE_SIZE;
-
-    if (result < 8192) return 8192;
+    if (result < 8192)
+        return 8192;
     return result;
 
 }
 
-int ethaddr_to_string(char* str2write, const struct ether_addr* eth_addr) {
+int ethaddr_to_string(char* str2write, const struct ether_addr* eth_addr)
+{
 
-    return sprintf (str2write, "%02x:%02x:%02x:%02x:%02x:%02x",
-        eth_addr->addr_bytes[0],
-        eth_addr->addr_bytes[1],
-        eth_addr->addr_bytes[2],
-        eth_addr->addr_bytes[3],
-        eth_addr->addr_bytes[4],
-        eth_addr->addr_bytes[5]);
+    return sprintf(str2write, "%02x:%02x:%02x:%02x:%02x:%02x",
+                   eth_addr->addr_bytes[0], eth_addr->addr_bytes[1],
+                   eth_addr->addr_bytes[2], eth_addr->addr_bytes[3],
+                   eth_addr->addr_bytes[4], eth_addr->addr_bytes[5]);
 }
 
-int main(int argc, char **argv) {
-
-
+/**
+ * Starting point of execution.
+ */
+int main(int argc, char **argv)
+{
 
     int status;
 
     printf("[[I]] Starting DPDK EAL...\n");
 
     status = rte_eal_init(argc, argv);
-    if (status < 0) {
+    if (status < 0)
+    {
         rte_exit(EXIT_FAILURE, "Invalid EAL parameters\n");
     }
 
@@ -225,28 +223,31 @@ int main(int argc, char **argv) {
 
     uint8_t devcount = rte_eth_dev_count();
 
-    if (devcount == 0) {
+    if (devcount == 0)
+    {
         rte_exit(EXIT_FAILURE, "No probed ethernet devices\n");
         printf("[[I]] No devs, exiting\n");
     }
     printf("[[I]] Found %i net devices.\n", devcount);
-
 
     uint8_t i;
     uint8_t our_lcore = 255;
     uint8_t portid;
     unsigned nb_ports;
 
-    for (i=0; i < RTE_MAX_LCORE; i++) {
+    for (i = 0; i < RTE_MAX_LCORE; i++)
+    {
 
-        if (rte_lcore_is_enabled(i) && !(rte_get_master_lcore() == i)) {
+        if (rte_lcore_is_enabled(i) && !(rte_get_master_lcore() == i))
+        {
             //printf("  Adding.\n");
             our_lcore = i;
             break;
         }
     }
 
-    if (our_lcore == 255) {
+    if (our_lcore == 255)
+    {
         rte_exit(EXIT_FAILURE, "No lcores were available\n");
     }
 
@@ -256,80 +257,72 @@ int main(int argc, char **argv) {
     //Find the interior and exterior interface by MAC address...
     printf("[[I]] Associating devices...\n");
 
-//    //Claims the first available interface for DPDK.
-//    struct ether_addr found_dev_macaddr;
-//    rte_eth_macaddr_get(ETHDEV_ID, &found_dev_macaddr);
-//    char ether_addr_string[20];
-//    ethaddr_to_string(ether_addr_string, &found_dev_macaddr);	//TODO
-//    printf("  MAC Address of device: %s\n", ether_addr_string);
-
     nb_ports = rte_eth_dev_count();
 
     uint8_t socket = rte_lcore_to_socket_id(our_lcore);
-        //We are on this socket, necessary for NUMA
+    //We are on this socket, necessary for NUMA
 
     //Set up a mempool for packets
 
     printf("[[I]] Configuring mempool...\n");
-    unsigned mempool_sz = tz_getMBufMempoolSize(1,1,1,1);	//TODO
+    unsigned mempool_sz = tz_getMBufMempoolSize(1, 1, 1, 1);
     mempool = rte_mempool_create("DEFAULT_MEMPOOL",
-        mempool_sz, //The number of elements in the mempool. n = (2^q - 1).
-        MBUF_SIZE,	//Size of each element
-        MEMPOOL_CACHE_SIZE,
-        sizeof(struct rte_pktmbuf_pool_private),
-        rte_pktmbuf_pool_init, NULL,
-        rte_pktmbuf_init, NULL, socket, 0);
+                                 mempool_sz, //The number of elements in the mempool. n = (2^q - 1).
+                                 MBUF_SIZE,	//Size of each element
+                                 MEMPOOL_CACHE_SIZE, sizeof(struct rte_pktmbuf_pool_private),
+                                 rte_pktmbuf_pool_init, NULL, rte_pktmbuf_init, NULL, socket, 0);
 
     if (mempool == NULL)
         rte_exit(EXIT_FAILURE, "MBuf creation failed for interface %i\n", i);
 
-    for (portid = 0; portid < nb_ports; portid++) {
-            if (port_init(portid, mempool) == 0) {
-                pppoe_enabled_ports[pppoe_enabled_port_nb] = portid;
-                pppoe_enabled_port_nb++;
-            } else {
-                rte_exit(EXIT_FAILURE,
+    for (portid = 0; portid < nb_ports; portid++)
+    {
+        if (port_init(portid, mempool) == 0)
+        {
+            pppoe_enabled_ports[pppoe_enabled_port_nb] = portid;
+            pppoe_enabled_port_nb++;
+        }
+        else
+        {
+            rte_exit(EXIT_FAILURE,
                      "Cannot init port %"PRIu8 "\n",
                      portid);
-            }
-
-            //Wait for ports up
-    printf("[[I]] Waiting for ports up...\n");
-
-    struct rte_eth_link link;
-    int up = 0;
-    while (1) {
-        memset(&link, 0, sizeof(link));
-        rte_eth_link_get_nowait(ETHDEV_ID, &link);
-        printf("  Link ");
-        if (link.link_status) {
-            printf("up\n");
-            up = 1;
-            break;
-        } else {
-            printf("down\n");
         }
-        rte_delay_ms(200);
+
+        //Wait for ports up
+        printf("[[I]] Waiting for ports up...\n");
+
+        struct rte_eth_link link;
+        int up = 0;
+        while (1)
+        {
+            memset(&link, 0, sizeof(link));
+            rte_eth_link_get_nowait(ETHDEV_ID, &link);
+            printf("  Link ");
+            if (link.link_status)
+            {
+                printf("up\n");
+                up = 1;
+                break;
+            }
+            else
+            {
+                printf("down\n");
+            }
+            rte_delay_ms(200);
         }
     }
-
 
     printf("[[I]] Launching data plane cores...\n");
     init_ring();
     rte_eal_remote_launch(lcore_slave_job, NULL, our_lcore);
     do_dataplane_job(NULL);
     if (rte_eal_wait_lcore(our_lcore) < 0)
-            return -1;
-
+        return -1;
 
     printf("[[I]] Exiting.\n");
-
 
     return 0;
 
 }
-
-
-
-
 

@@ -1,4 +1,4 @@
-# Makefile - Makes the server executable.
+# udp_clinet - Test udp client stub.
 # Copyright (C) 2016  Sooraj Mandotti
 #
 # This program is free software: you can redistribute it and/or modify
@@ -16,25 +16,26 @@
 #
 # sooraj.mandotti@stud.tu-darmstadt.de, Technical University Darmstadt
 
-CC=gcc
+import socket
+import sys
 
-# Should contain pre-built DPDK at least.
-RTE_SDK=deps/dpdk
+# Create a UDP socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-# Default target, can be overriden by command line or environment
-RTE_TARGET ?= x86_64-native-linuxapp-gcc
+server_address = ('192.168.0.101', 5005)
+message = 'This is the message.  It will be repeated.'
 
-LDDIRS += -L$(RTE_SDK)/$(RTE_TARGET)/lib	#Here, libdpdk.so should reside.
+try:
 
-LDLIBS += -ldpdk
-LDLIBS += -ldl
-LDLIBS += -lpthread
-#LDLIBS += -lxml2 
-LDLIBS += -lm
+    # Send data
+    print 'sending data : ',message
+    sent = sock.sendto(message, server_address)
 
-app: lab_main.o
-	$(CC) $(LDDIRS) -o lab_main lab_main.o $(LDLIBS)
+    # Receive response
+    print 'waiting to receive'
+    data, server = sock.recvfrom(4096)
+    print 'received :',data
 
-lab_main.o: lab_main.c lab_task.c
-	$(CC) -mssse3 -I../grt -I$(RTE_SDK)/$(RTE_TARGET)/include -c lab_main.c
-
+finally:
+    print 'closing socket'
+    sock.close()

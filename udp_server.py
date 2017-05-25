@@ -1,5 +1,5 @@
-# run - run the server.
-# Copyright (C) 2016  Puneet Arora.
+# udp_server - Test udp server stub.
+# Copyright (C) 2016  Govind Singh
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -14,21 +14,24 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# puneet.arora@stud.tu-darmstadt.de, Technical University Darmstadt
+# govind.singh@stud.tu-darmstadt.de, Technical University Darmstadt
 
-#!/bin/bash
+import socket
+import sys
 
-DPDK_DIR=deps/dpdk
-DPDK_PLAF=x86_64-native-linuxapp-gcc
+# Create a TCP/IP socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-#Required kernel modules
-modprobe uio
-insmod $DPDK_DIR/$DPDK_PLAF/kmod/igb_uio.ko
-insmod $DPDK_DIR/$DPDK_PLAF/kmod/rte_kni.ko
+# Bind the socket to the port
+server_address = ('192.168.56.1', 5006)
+print 'starting udp server...'
+sock.bind(server_address)
 
-#The following must be done for every device we want to use. Only for VirtIO devices this is not required.
-$DPDK_DIR/tools/dpdk_nic_bind.py --bind igb_uio 0000:00:08.0
-
-export LD_LIBRARY_PATH=$DPDK_DIR/$DPDK_PLAF/lib
-./lab_main -c3 -n4 -d $DPDK_DIR/$DPDK_PLAF/lib/librte_pmd_virtio.so
-
+while True:
+    print 'waiting to receive message'
+    data, address = sock.recvfrom(4096)
+    print 'data received :',data
+	
+    if data:
+        sent = sock.sendto(data, address)
+        print 'data replied!!!'
